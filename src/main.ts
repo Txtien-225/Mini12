@@ -1,70 +1,40 @@
 import './styles.css';
+import { Capacitor } from '@capacitor/core';
+import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Network } from '@capacitor/network';
+import { Geolocation } from '@capacitor/geolocation';
 
-type Operator = '+' | '-' | '×' | '÷';
+type Survey = { id: string; createdAt: string; status: 'PENDING_SYNC' | 'SYNCED'; building: string; floor: string; room: string; category: string; rating: number; notes: string; photo?: string; latitude?: number; longitude?: number };
+type Draft = Omit<Survey, 'id' | 'createdAt' | 'status'>;
+const categories = ['Hardware', 'Projector', 'AC', 'Electrical', 'Furniture'];
+const emptyDraft: Draft = { building: '', floor: '', room: '', category: 'Hardware', rating: 0, notes: '' };
+
+class SurveyStore {
+  private db?: IDBDatabase;
+  async open() { if (this.db) return this.db; this.db = await new Promise((resolve, reject) => { const request = indexedDB.open('vku-field-survey', 1); request.onupgradeneeded = () => { const db = request.result; db.createObjectStore('drafts', { keyPath: 'key' }); db.createObjectStore('surveys', { keyPath: 'id' }); }; request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); }); return this.db; }
+  async saveDraft(draft: Draft) { const db = await this.open(); return new Promise<void>((resolve, reject) => { const tx = db.transaction('drafts', 'readwrite'); tx.objectStore('drafts').put({ key: 'current', ...draft }); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }); }
+  async getDraft(): Promise<Draft> { const db = await this.open(); return new Promise((resolve) => { const req = db.transaction('drafts').objectStore('drafts').get('current'); req.onsuccess = () => resolve({ ...emptyDraft, ...(req.result ?? {}) }); req.onerror = () => resolve(emptyDraft); }); }
+  async addSurvey(survey: Survey) { const db = await this.open(); return new Promise<void>((resolve, reject) => { const tx = db.transaction(['surveys', 'drafts'], 'readwrite'); tx.objectStore('surveys').put(survey); tx.objectStore('drafts').delete('current'); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }); }
+  async updateSurvey(survey: Survey) { const db = await this.open(); return new Promise<void>((resolve, reject) => { const tx = db.transaction('surveys', 'readwrite'); tx.objectStore('surveys').put(survey); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }); }
+  async surveys(): Promise<Survey[]> { const db = await this.open(); return new Promise((resolve) => { const req = db.transaction('surveys').objectStore('surveys').getAll(); req.onsuccess = () => resolve((req.result as Survey[]).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }); }
+}
+
+const store = new SurveyStore();
+let draft: Draft = { ...emptyDraft };
+let online = navigator.onLine;
 const app = document.querySelector<HTMLDivElement>('#app')!;
-let display = '0', previous: number | null = null, operator: Operator | null = null;
-let waitingForOperand = false, expression = '';
+const esc = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c]!));
 
-const format = (value: number) => {
-  if (!Number.isFinite(value)) return 'Lỗi';
-  return String(Number(value.toPrecision(12)));
-};
-const calculate = (a: number, b: number, op: Operator) => op === '+' ? a + b : op === '-' ? a - b : op === '×' ? a * b : b === 0 ? Infinity : a / b;
+function render() { app.innerHTML = `<main class="shell"><header class="topbar"><div class="brand"><img class="vku-logo" src="/vku.png" alt="VKU - Đại học Đà Nẵng" /><div><p class="eyebrow">VKU CAMPUS OPERATIONS</p><h1>Field Survey</h1></div></div><div class="status ${online ? 'is-online' : 'is-offline'}"><span></span>${online ? 'Online' : 'Offline'}</div></header><section class="hero"><div><p class="eyebrow blue">OFFLINE-FIRST INSPECTIONS</p><h2>Capture every detail.<br/><em>Even without signal.</em></h2><p class="intro">Your work is saved securely on this device and queued for sync when you reconnect.</p></div><div class="hero-art"><span>⌁</span><strong>100%</strong><small>local capture</small></div></section><section class="stats"><div><strong id="pending-count">0</strong><span>Pending sync</span></div><div><strong>IndexedDB</strong><span>Draft protection</span></div><div><strong>Ready</strong><span>Native bridge</span></div></section><section class="card"><div class="card-heading"><div><p class="eyebrow">NEW INSPECTION</p><h3>Facility condition report</h3></div><span class="step-pill">STEP 1 / 1</span></div><form id="survey-form"><div class="field-grid"><label>Building<input name="building" placeholder="e.g. Building A" value="${esc(draft.building)}" required /></label><label>Floor<input name="floor" placeholder="e.g. 2" value="${esc(draft.floor)}" required /></label><label>Room number<input name="room" placeholder="e.g. 204" value="${esc(draft.room)}" required /></label><label>Category<select name="category">${categories.map((c) => `<option ${c === draft.category ? 'selected' : ''}>${c}</option>`).join('')}</select></label></div><fieldset><legend>Condition rating</legend><div class="stars" role="radiogroup">${[1,2,3,4,5].map((n) => `<button type="button" class="star ${n <= draft.rating ? 'selected' : ''}" data-rating="${n}" aria-label="${n} stars">★</button>`).join('')}</div><span class="rating-label">${draft.rating ? `${draft.rating} / 5 — ${draft.rating >= 4 ? 'Good condition' : draft.rating >= 3 ? 'Needs attention' : 'Critical attention'}` : 'Select a rating'}</span></fieldset><label>Defect notes <span class="optional">OPTIONAL</span><textarea name="notes" rows="3" placeholder="Describe visible issues, missing parts, or safety concerns...">${esc(draft.notes)}</textarea></label><div class="photo-row"><div><p class="label">Evidence photo <span class="optional">OPTIONAL</span></p><p class="hint">Attach a photo to help the maintenance team.</p></div><button type="button" class="photo-button" id="photo-button">▣ <span>${draft.photo ? 'Photo attached' : 'Take photo'}</span></button></div><div class="form-footer"><span class="saved-note" id="saved-note">● Draft saved locally</span><button class="submit-button" type="submit">Submit inspection <span>→</span></button></div></form></section><section class="queue"><div class="queue-heading"><div><p class="eyebrow">RECENT ACTIVITY</p><h3>Sync queue</h3></div><button class="text-button" id="sync-button">Sync now ↗</button></div><div id="queue-list" class="queue-list"></div></section><footer>VKU Field Survey <span>•</span> Works offline by design</footer></main>`; bind(); refreshQueue(); }
 
-function render() {
-  app.innerHTML = `
-    <main class="page-shell">
-      <header class="brand-bar">
-        <div class="brand-lockup"><img src="/vku.png" alt="VKU - Đại học Đà Nẵng" />
-          <div class="brand-copy"><span>ĐẠI HỌC ĐÀ NẴNG</span><strong>TRƯỜNG ĐẠI HỌC CÔNG NGHỆ THÔNG TIN<br />VÀ TRUYỀN THÔNG VIỆT - HÀN</strong></div>
-        </div><span class="assignment-tag">BÀI TẬP CÁ NHÂN</span>
-      </header>
-      <section class="content">
-        <div class="heading-block"><p class="kicker">BÀI TẬP LẬP TRÌNH CƠ BẢN</p><h1>Calculator</h1><p class="subtitle">Thực hiện các phép toán cơ bản: cộng, trừ, nhân, chia</p></div>
-        <section class="calculator" aria-label="Calculator">
-          <div class="calculator-top"><span>VKU CALCULATOR</span><span>READY</span></div>
-          <div class="screen"><div class="expression" id="expression">${expression || '&nbsp;'}</div><output id="display" aria-live="polite">${display}</output></div>
-          <div class="keys">
-            <button class="utility" data-action="clear">AC</button><button class="utility" data-action="sign">±</button><button class="utility" data-action="percent">%</button><button class="operator" data-value="÷">÷</button>
-            <button data-value="7">7</button><button data-value="8">8</button><button data-value="9">9</button><button class="operator" data-value="×">×</button>
-            <button data-value="4">4</button><button data-value="5">5</button><button data-value="6">6</button><button class="operator" data-value="-">−</button>
-            <button data-value="1">1</button><button data-value="2">2</button><button data-value="3">3</button><button class="operator" data-value="+">+</button>
-            <button class="zero" data-value="0">0</button><button data-action="decimal">.</button><button class="equals" data-action="equals">=</button>
-          </div>
-        </section>
-        <p class="hint"><span>⌨</span> Bạn cũng có thể sử dụng bàn phím để nhập phép tính</p>
-      </section>
-      <footer><span class="line red"></span><span class="line gold"></span><span class="line blue"></span></footer>
-    </main>`;
-  bind();
-}
-function inputDigit(digit: string) {
-  if (display === 'Lỗi' || waitingForOperand) { display = digit; waitingForOperand = false; }
-  else display = display === '0' ? digit : display + digit;
-}
-function chooseOperator(next: Operator) {
-  const value = Number(display);
-  if (previous !== null && operator && !waitingForOperand) { display = format(calculate(previous, value, operator)); previous = display === 'Lỗi' ? null : Number(display); }
-  else previous = value;
-  operator = next; waitingForOperand = true; expression = `${format(previous ?? value)} ${next}`;
-}
-function press(action?: string, value?: string) {
-  if (value && /^[0-9]$/.test(value)) inputDigit(value);
-  else if (value === '÷' || value === '×' || value === '-' || value === '+') chooseOperator(value);
-  else if (action === 'decimal' && !display.includes('.')) display += '.';
-  else if (action === 'clear') { display = '0'; previous = null; operator = null; waitingForOperand = false; expression = ''; }
-  else if (action === 'sign' && display !== '0' && display !== 'Lỗi') display = display.startsWith('-') ? display.slice(1) : `-${display}`;
-  else if (action === 'percent' && display !== 'Lỗi') display = format(Number(display) / 100);
-  else if (action === 'equals' && previous !== null && operator) { const result = calculate(previous, Number(display), operator); expression = `${format(previous)} ${operator} ${display} =`; display = format(result); previous = null; operator = null; waitingForOperand = true; }
-  updateScreen();
-}
-function updateScreen() { document.querySelector('#display')!.textContent = display; document.querySelector('#expression')!.innerHTML = expression || '&nbsp;'; }
-function bind() { document.querySelectorAll<HTMLButtonElement>('.keys button').forEach((button) => button.addEventListener('click', () => press(button.dataset.action, button.dataset.value))); }
-window.addEventListener('keydown', (event) => {
-  const keyMap: Record<string, string> = { '*': '×', '/': '÷' };
-  if (/^[0-9]$/.test(event.key)) press(undefined, event.key);
-  else if (['+', '-', '*', '/'].includes(event.key)) { event.preventDefault(); press(undefined, keyMap[event.key] || event.key); }
-  else if (event.key === '.') press('decimal'); else if (event.key === 'Enter' || event.key === '=') press('equals');
-  else if (event.key === 'Escape') press('clear'); else if (event.key === '%') press('percent');
-});
-render();
+function collect() { const form = document.querySelector<HTMLFormElement>('#survey-form')!; const data = new FormData(form); draft = { ...draft, building: String(data.get('building') ?? ''), floor: String(data.get('floor') ?? ''), room: String(data.get('room') ?? ''), category: String(data.get('category') ?? ''), notes: String(data.get('notes') ?? '') }; store.saveDraft(draft); }
+function bind() { const form = document.querySelector<HTMLFormElement>('#survey-form')!; form.addEventListener('input', collect); form.addEventListener('submit', async (e) => { e.preventDefault(); collect(); if (!draft.rating) return alert('Please select a condition rating.'); if (!draft.building || !draft.floor || !draft.room) return alert('Please complete building, floor, and room number.'); const position = await getLocation(); await store.addSurvey({ ...draft, ...position, id: crypto.randomUUID(), createdAt: new Date().toISOString(), status: 'PENDING_SYNC' }); draft = { ...emptyDraft }; render(); syncQueue(); }); document.querySelectorAll<HTMLButtonElement>('[data-rating]').forEach((button) => button.onclick = () => { draft.rating = Number(button.dataset.rating); collect(); render(); }); document.querySelector('#photo-button')!.addEventListener('click', takePhoto); document.querySelector('#sync-button')!.addEventListener('click', syncQueue); }
+async function getLocation(): Promise<{ latitude?: number; longitude?: number }> { try { if (Capacitor.isNativePlatform()) { const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000 }); return { latitude: position.coords.latitude, longitude: position.coords.longitude }; } return await new Promise((resolve) => navigator.geolocation.getCurrentPosition((position) => resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude }), () => resolve({}), { enableHighAccuracy: true, timeout: 8000 })); } catch { return {}; } }
+async function takePhoto() { try { if (Capacitor.isNativePlatform()) { const image = await Camera.getPhoto({ source: CameraSource.Camera, resultType: CameraResultType.DataUrl, quality: 80 }); if (image.dataUrl) draft.photo = image.dataUrl; } else { const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment'; input.onchange = () => { const file = input.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { draft.photo = String(reader.result); collect(); render(); }; reader.readAsDataURL(file); }; input.click(); return; } collect(); render(); } catch { /* User cancelled camera */ } }
+async function syncQueue() { if (!online) return; const items = await store.surveys(); const endpoint = import.meta.env.VITE_SYNC_ENDPOINT || '/api/surveys'; for (const item of items.filter((s) => s.status === 'PENDING_SYNC')) { try { const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) }); if (!response.ok) throw new Error('Sync failed'); await store.updateSurvey({ ...item, status: 'SYNCED' }); } catch { break; } } refreshQueue(); }
+async function refreshQueue() { const items = await store.surveys(); const pending = items.filter((s) => s.status === 'PENDING_SYNC').length; const count = document.querySelector('#pending-count'); if (count) count.textContent = String(pending).padStart(2, '0'); const list = document.querySelector<HTMLDivElement>('#queue-list'); if (!list) return; list.innerHTML = items.length ? items.slice(0, 4).map((item) => `<div class="queue-item"><div class="queue-icon">${item.status === 'SYNCED' ? '✓' : '↥'}</div><div><strong>${esc(item.category)} check · ${esc(item.building)} / ${esc(item.room)}</strong><small>${new Date(item.createdAt).toLocaleString()} · ${item.status === 'SYNCED' ? 'Synced' : 'Waiting for connection'}</small></div><span class="queue-status ${item.status === 'SYNCED' ? 'synced' : ''}">${item.status === 'SYNCED' ? 'SYNCED' : 'PENDING'}</span></div>`).join('') : '<div class="empty">No inspections submitted yet. Your queue will appear here.</div>'; }
+function setOnline(value: boolean) { online = value; render(); if (online) syncQueue(); }
+window.addEventListener('online', () => setOnline(true)); window.addEventListener('offline', () => setOnline(false));
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').then((registration) => { const syncRegistration = registration as ServiceWorkerRegistration & { sync?: { register(tag: string): Promise<void> } }; window.addEventListener('online', () => syncRegistration.sync?.register('survey-sync')); navigator.serviceWorker.addEventListener('message', (event) => { if (event.data?.type === 'SYNC_REQUESTED') syncQueue(); }); });
+if (Capacitor.isNativePlatform()) Network.addListener('networkStatusChange', (status) => setOnline(status.connected));
+store.getDraft().then((saved) => { draft = saved; render(); });
