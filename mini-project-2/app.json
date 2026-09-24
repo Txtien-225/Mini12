@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "VKU Study Rooms",
+    "slug": "vku-study-room-booking",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "vkurooms",
+    "plugins": ["expo-notifications"],
+    "android": { "package": "vn.vku.studyrooms" },
+    "ios": { "bundleIdentifier": "vn.vku.studyrooms" }
+  }
+}
