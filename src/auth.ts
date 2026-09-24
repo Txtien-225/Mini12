@@ -1,6 +1,7 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost/vku-field-survey/api').replace(/\/$/, '');
 const tokenKey = 'vku_auth_token';
 export const getAuthToken = () => localStorage.getItem(tokenKey) || '';
+export async function logout() { try { await call('logout', 'POST'); } catch { /* session may already be expired */ } localStorage.removeItem(tokenKey); location.reload(); }
 const call = async (action: string, method: 'GET' | 'POST', data?: unknown) => {
   const response = await fetch(`${API_BASE}/index.php?action=${action}`, { method, headers: { 'Content-Type': 'application/json', ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {}) }, body: method === 'POST' ? JSON.stringify(data || {}) : undefined });
   const result = await response.json().catch(() => ({}));
