@@ -1,4 +1,4 @@
-const CACHE = 'vku-field-survey-v1';
+const CACHE = 'vku-field-survey-v2';
 const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icons/icon-192.svg', '/icons/icon-512.svg'];
 
 self.addEventListener('install', (event) => {
