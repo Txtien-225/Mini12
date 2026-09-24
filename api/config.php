@@ -35,7 +35,11 @@ function respond(array $data, int $status = 200): never {
 }
 
 function bearer(): string {
-    $header = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+    $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? '';
+    if ($header === '' && function_exists('getallheaders')) {
+        $headers = getallheaders();
+        $header = $headers['Authorization'] ?? $headers['authorization'] ?? '';
+    }
     return preg_match('/Bearer\s+(.+)/i', $header, $m) ? trim($m[1]) : '';
 }
 
