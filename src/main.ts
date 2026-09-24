@@ -3,7 +3,7 @@ import { Capacitor } from '@capacitor/core';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Network } from '@capacitor/network';
 import { Geolocation } from '@capacitor/geolocation';
-import { getAuthToken, initAuth } from './auth';
+import { getAuthToken, initAuth, logout } from './auth';
 
 type Survey = { id: string; createdAt: string; status: 'PENDING_SYNC' | 'SYNCED'; building: string; floor: string; room: string; category: string; rating: number; notes: string; photo?: string; latitude?: number; longitude?: number };
 type Draft = Omit<Survey, 'id' | 'createdAt' | 'status'>;
@@ -38,4 +38,5 @@ function setOnline(value: boolean) { online = value; render(); if (online) syncQ
 window.addEventListener('online', () => setOnline(true)); window.addEventListener('offline', () => setOnline(false));
 if (import.meta.env.PROD && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').then((registration) => { const syncRegistration = registration as ServiceWorkerRegistration & { sync?: { register(tag: string): Promise<void> } }; window.addEventListener('online', () => syncRegistration.sync?.register('survey-sync')); navigator.serviceWorker.addEventListener('message', (event) => { if (event.data?.type === 'SYNC_REQUESTED') syncQueue(); }); });
 if (Capacitor.isNativePlatform()) Network.addListener('networkStatusChange', (status) => setOnline(status.connected));
-initAuth(() => { store.getDraft().then((saved) => { draft = saved; render(); syncQueue(); }); });
+function renderAccount() { const user = (window as any).__vkuUser as { full_name?: string } | undefined; const topbar = document.querySelector('.topbar'); if (!user || !topbar) return; const account = document.createElement('div'); account.className = 'account-box'; account.innerHTML = '<span>Xin chào, </span><strong></strong><button type="button">Đăng xuất</button>'; account.querySelector('strong')!.textContent = user.full_name || 'bạn'; account.querySelector('button')!.addEventListener('click', logout); topbar.append(account); }
+initAuth(() => { store.getDraft().then((saved) => { draft = saved; render(); renderAccount(); syncQueue(); }); });
